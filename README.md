@@ -39,7 +39,7 @@ This is a work in progress project. Integrating uavcan protocol to TI mmwave sof
 
 ### Compiler
 
-- [TI ARM-CFG v20.2.7-LTS](https://www.ti.com/tool/download/ARM-CGT/20.2.7.LTS)
+- [TI ARM-CGT v20.2.7-LTS](https://www.ti.com/tool/download/ARM-CGT/20.2.7.LTS)
 - gcc 11.4.0
 
 ## References
