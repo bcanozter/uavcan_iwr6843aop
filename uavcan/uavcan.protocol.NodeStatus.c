@@ -5,7 +5,7 @@
 #ifdef CANARD_DSDLC_TEST_BUILD
 #include <test_helpers.h>
 #endif
-extern void CLI_write(const char *format, ...);
+
 uint32_t uavcan_protocol_NodeStatus_encode(struct uavcan_protocol_NodeStatus* msg, uint8_t* buffer
 #if CANARD_ENABLE_TAO_OPTION
     , bool tao

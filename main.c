@@ -271,11 +271,6 @@ static void uavcan_rx_event_task(UArg arg0, UArg arg1)
                                    buffer,
                                    total_size);
             GateMutex_leave(gateMutexCanard, key);
-
-            if (retval < 0)
-            {
-                CLI_write("ERROR REQUEST OR RESPOND (RX task) %d\n", retval);
-            }
         }
     }
 }
@@ -3227,7 +3222,7 @@ static void MCANAppCallback(CANFD_MsgObjHandle handle, CANFD_Reason reason)
             retVal = canardHandleRxFrame(&canard, &rx_frame, (Clock_getTicks() * Clock_tickPeriod));
             if (retVal < 0)
             {
-                CLI_write("Error: canardHandleRxFrame %d\n", retVal);
+                // CLI_write("Error: canardHandleRxFrame %d\n", retVal);
                 if (retVal == -CANARD_ERROR_RX_MISSED_START)
                 {
                     uint64_t dummy_signature;
