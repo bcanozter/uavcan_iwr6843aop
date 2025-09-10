@@ -1,0 +1,38 @@
+# Build artifacts and temporary files
+*.out
+*.hex
+*.map
+*.obj
+*.o
+*.lib
+*.a
+*.axf
+*.elf
+*.d
+*.dep
+*.oer4f
+# Configuration and project-specific files
+.settings/
+.metadata/
+.project
+.cproject
+.ccsproject
+.launch
+.clangd
+.xdchelp
+.theia/
+.vscode/
+.exclude
+*.libs
+src/
+
+# Debug and log files
+*.log
+*.trc
+
+# Operating system and editor-specific files
+.DS_Store
+*~
+*.bak
+
+Debug/
