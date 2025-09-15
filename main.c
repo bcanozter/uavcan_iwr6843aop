@@ -72,13 +72,20 @@
 static uint8_t transfer_id = 0;
 
 CanardInstance canard;
-static uint8_t canard_memory_pool[1024];
+static uint8_t canard_memory_pool[2048];
 static uint32_t get_uptime_sec(void);
-
+static uint64_t get_uptime_usec(void);
+static void send_getnodeinfo_response(void);
+Task_Handle dronecanTask;
+Task_Handle uavcanRxTask;
 static CanardRxTransfer g_rxTransferInfo;
 static Event_Handle g_rxEventHandle;
 static GateMutex_Handle gateMutexCanard;
+static volatile uint32_t clk_sys_ticks = 0;
 
+void clk0Fxn(UArg arg0);
+Clock_Struct clk0Struct;
+Clock_Handle clkHandle;
 /**
  * @brief Task Priority settings:
  * Mmwave task is at higher priority because of potential async messages from BSS
@@ -92,8 +99,8 @@ static GateMutex_Handle gateMutexCanard;
 #define MMWDEMO_CLI_TASK_PRIORITY 3
 #define MMWDEMO_DPC_OBJDET_DPM_TASK_PRIORITY 4
 #define MMWDEMO_MMWAVE_CTRL_TASK_PRIORITY 5
-#define UAVCAN_TASK_PRIORITY 5
-#define UAVCAN_RX_EVENT_TASK_PRIORITY 5
+#define UAVCAN_TASK_PRIORITY 3
+#define UAVCAN_RX_EVENT_TASK_PRIORITY 3
 
 #if (MMWDEMO_CLI_TASK_PRIORITY >= MMWDEMO_DPC_OBJDET_DPM_TASK_PRIORITY)
 #error CLI task priority must be < Object Detection DPM task priority
@@ -233,46 +240,50 @@ static void uavcan_rx_event_task(UArg arg0, UArg arg1)
         events = Event_pend(g_rxEventHandle, UAVCAN_GETNODEINFO_REQUEST_EVENT, Event_Id_NONE, BIOS_WAIT_FOREVER);
         if (events & UAVCAN_GETNODEINFO_REQUEST_EVENT)
         {
-            uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
-            struct uavcan_protocol_GetNodeInfoResponse pkt;
-            memset(&buffer, 0, sizeof(buffer));
             IArg key = GateMutex_enter(gateMutexCanard);
-            memset(&pkt, 0, sizeof(pkt));
-            struct uavcan_protocol_NodeStatus node_status;
-            node_status.uptime_sec = get_uptime_sec();
-            node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
-            node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
-            node_status.sub_mode = 0;
-            node_status.vendor_specific_status_code = 0;
-            pkt.status = node_status;
-
-            pkt.software_version.major = APP_VERSION_MAJOR;
-            pkt.software_version.minor = APP_VERSION_MINOR;
-            pkt.software_version.optional_field_flags = 0;
-            pkt.software_version.vcs_commit = 0;
-
-            pkt.hardware_version.major = 1;
-            pkt.hardware_version.minor = 0;
-            const uint8_t id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0};
-            memcpy(pkt.hardware_version.unique_id, id, sizeof(id));
-            const uint8_t node_name_len = strlen(APP_NODE_NAME);
-            strncpy((char *)pkt.name.data, APP_NODE_NAME, node_name_len);
-            pkt.name.len = node_name_len;
-
-            uint32_t total_size = uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
-
-            canardRequestOrRespond(&canard,
-                                   g_rxTransferInfo.source_node_id,
-                                   UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE,
-                                   UAVCAN_PROTOCOL_GETNODEINFO_ID,
-                                   &g_rxTransferInfo.transfer_id,
-                                   g_rxTransferInfo.priority,
-                                   CanardResponse,
-                                   buffer,
-                                   total_size);
+            send_getnodeinfo_response();
             GateMutex_leave(gateMutexCanard, key);
         }
     }
+}
+
+static void send_getnodeinfo_response(void){
+    uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
+    struct uavcan_protocol_GetNodeInfoResponse pkt;
+    memset(&buffer, 0, sizeof(buffer));
+    memset(&pkt, 0, sizeof(struct uavcan_protocol_GetNodeInfoResponse));
+    struct uavcan_protocol_NodeStatus node_status;
+    node_status.uptime_sec = get_uptime_sec();
+    node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+    node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
+    node_status.sub_mode = 0;
+    node_status.vendor_specific_status_code = 0;
+    pkt.status = node_status;
+
+    pkt.software_version.major = APP_VERSION_MAJOR;
+    pkt.software_version.minor = APP_VERSION_MINOR;
+    pkt.software_version.optional_field_flags = 0;
+    pkt.software_version.vcs_commit = 0;
+
+    pkt.hardware_version.major = 1;
+    pkt.hardware_version.minor = 0;
+    const uint8_t id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0};
+    memcpy(pkt.hardware_version.unique_id, id, sizeof(id));
+    const uint8_t node_name_len = strlen(APP_NODE_NAME);
+    strncpy((char *)pkt.name.data, APP_NODE_NAME, node_name_len);
+    pkt.name.len = node_name_len;
+
+    uint32_t total_size = uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
+
+    canardRequestOrRespond(&canard,
+                           g_rxTransferInfo.source_node_id,
+                           UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE,
+                           UAVCAN_PROTOCOL_GETNODEINFO_ID,
+                           &g_rxTransferInfo.transfer_id,
+                           g_rxTransferInfo.priority,
+                           CanardResponse,
+                           buffer,
+                           total_size);
 }
 static bool shouldAcceptTransfer(const CanardInstance *ins,
                                  uint64_t *out_data_type_signature,
@@ -282,17 +293,15 @@ static bool shouldAcceptTransfer(const CanardInstance *ins,
 {
     if (transfer_type == CanardTransferTypeRequest)
     {
-        // check if we want to handle a specific service request
         switch (data_type_id)
         {
         case UAVCAN_PROTOCOL_GETNODEINFO_ID:
         {
-            *out_data_type_signature = UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE;
+            *out_data_type_signature = UAVCAN_PROTOCOL_GETNODEINFO_REQUEST_SIGNATURE;
             return true;
         }
         }
     }
-    // we don't want any other messages
     return false;
 }
 
@@ -343,11 +352,12 @@ static void broadcast_node_status(void)
 
 static void handle_canard_tx_queue(void)
 {
-    uint64_t current_usec = (uint64_t)Clock_getTicks() * Clock_tickPeriod;
-    canardCleanupStaleTransfers(&canard, current_usec);
+    IArg key = GateMutex_enter(gateMutexCanard);
+
+    canardCleanupStaleTransfers(&canard, get_uptime_usec());
     Task_sleep(1);
     int32_t errCode = 0;
-    IArg key = GateMutex_enter(gateMutexCanard);
+
     for (CanardCANFrame *txf = NULL;
          (txf = canardPeekTxQueue(&canard)) != NULL;)
     {
@@ -359,6 +369,27 @@ static void handle_canard_tx_queue(void)
         }
     }
     GateMutex_leave(gateMutexCanard, key);
+}
+
+void print_task_stats(void){
+    Task_Stat stat;
+    CLI_write("%20s %12s %12s %12s\n", "Task Name", "Size", "Used", "Free");
+    Task_stat(gMmwMCB.taskHandles.initTask, &stat);
+    CLI_write("%20s %12d %12d %12d\n", "Init",
+              stat.stackSize, stat.used, stat.stackSize - stat.used);
+
+    Task_stat(dronecanTask, &stat);
+    CLI_write("%20s %12d %12d %12d\n", "dronecan",
+              stat.stackSize, stat.used, stat.stackSize - stat.used);
+
+    Task_stat(uavcanRxTask, &stat);
+    CLI_write("%20s %12d %12d %12d\n", "uavcanrx",
+            stat.stackSize, stat.used, stat.stackSize - stat.used);
+
+    CanardPoolAllocatorStatistics stats = canardGetPoolAllocatorStatistics(&canard);
+    CLI_write("%20s %12s %12s %12s\n", " ", "capacity_blocks", "current_usage_blocks", "peak_usage_blocks");
+    CLI_write("%20s %12u %12u %12u\n", "canard pool",
+        stats.capacity_blocks, stats.current_usage_blocks, stats.peak_usage_blocks);
 }
 
 static void uavcan_task(UArg arg0, UArg arg1)
@@ -373,6 +404,7 @@ static void uavcan_task(UArg arg0, UArg arg1)
         // publish_debug_msg();
         broadcast_node_status();
         handle_canard_tx_queue();
+        print_task_stats();
         Task_sleep(1000);
     }
 }
@@ -2802,6 +2834,7 @@ static void MmwDemo_DPC_ObjectDetection_dpmTask(UArg arg0, UArg arg1)
                 {
                     MmwDemo_transferLVDSUserData(currSubFrameIndx, result);
                 }
+                //dpm result, may change to different detection and tracking
 
                 MmwDemo_transmitProcessedOutput(gMmwMCB.loggingUartHandle, result,
                                                 &currSubFrameStats->outputStats);
@@ -3177,8 +3210,13 @@ static void MCANAppErrStatusCallback(CANFD_Handle handle, CANFD_Reason reason,
 
 static uint32_t get_uptime_sec(void)
 {
-    uint32_t seconds = ((Clock_getTicks() * Clock_tickPeriod) / 1000000U);
-    return seconds;
+    // uint32_t seconds = ((Clock_getTicks() * Clock_tickPeriod) / 1000000U);
+    // CLI_write("get_uptime_sec: %lu",seconds);
+    return (uint32_t)(((uint64_t)clk_sys_ticks *  Clock_tickPeriod )/ 1000000U);
+}
+
+static uint64_t get_uptime_usec(void){
+    return ((uint64_t)clk_sys_ticks *  Clock_tickPeriod );
 }
 
 #define SOURCE_ID_FROM_ID(x) ((uint8_t)(((x) >> 0U) & 0x7FU))
@@ -3219,7 +3257,7 @@ static void MCANAppCallback(CANFD_MsgObjHandle handle, CANFD_Reason reason)
             rx_frame.iface_id = 0;
             rx_frame.data_len = rxDataLength;
             memcpy(rx_frame.data, &rxData, rxDataLength);
-            retVal = canardHandleRxFrame(&canard, &rx_frame, (Clock_getTicks() * Clock_tickPeriod));
+            retVal = canardHandleRxFrame(&canard, &rx_frame, get_uptime_usec());
             if (retVal < 0)
             {
                 // CLI_write("Error: canardHandleRxFrame %d\n", retVal);
@@ -3640,12 +3678,12 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
     }
     Task_Params_init(&taskParams);
     taskParams.priority = UAVCAN_TASK_PRIORITY;
-    taskParams.stackSize = 4 * 1024;
-    Task_Handle dronecanTask = Task_create(uavcan_task, &taskParams, NULL);
+    taskParams.stackSize = 2 * 1024;
+    dronecanTask = Task_create(uavcan_task, &taskParams, NULL);
     Task_Params_init(&taskParams);
     taskParams.priority = UAVCAN_RX_EVENT_TASK_PRIORITY;
     taskParams.stackSize = 2 * 1024;
-    Task_Handle uavcanRxTask = Task_create(uavcan_rx_event_task, &taskParams, NULL);
+    uavcanRxTask = Task_create(uavcan_rx_event_task, &taskParams, NULL);
     if (uavcanRxTask == NULL)
     {
         CLI_write("Error: UAVCAN RX event proc task create failed\n");
@@ -3677,6 +3715,13 @@ void MmwDemo_sleep(void)
     asm(" WFI ");
 }
 
+void clk0Fxn(UArg arg0)
+{
+    clk_sys_ticks = Clock_getTicks();
+    // CLI_write("System time in clk0Fxn = %lu\n", (ULong)time);
+}
+
+
 /**
  *  @b Description
  *  @n
@@ -3688,6 +3733,7 @@ void MmwDemo_sleep(void)
 int main(void)
 
 {
+    Clock_Params clkParams;
     Task_Params taskParams;
     int32_t errCode;
     SOC_Handle socHandle;
@@ -3746,6 +3792,17 @@ int main(void)
     Task_Params_init(&taskParams);
     gMmwMCB.taskHandles.initTask = Task_create(MmwDemo_initTask, &taskParams, NULL);
 
+
+    /* Clock Init */
+    Clock_Params_init(&clkParams);
+    clkParams.period    = 5000 / Clock_tickPeriod;
+    clkParams.startFlag = TRUE;
+
+    /* Construct a periodic Clock Instance */
+    Clock_construct(&clk0Struct, (Clock_FuncPtr)clk0Fxn, 5000 / Clock_tickPeriod, &clkParams);
+    clkHandle = Clock_handle(&clk0Struct);
+
+    Clock_start(clkHandle);
     /* Start BIOS */
     BIOS_start();
     return 0;
