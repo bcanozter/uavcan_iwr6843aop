@@ -121,7 +121,7 @@ uint8_t gMmwL3[SOC_L3RAM_SIZE];
 #pragma DATA_SECTION(gMmwL3, ".l3ram");
 
 /*! TCM RAM buffer for object detection DPC */
-#define MMWDEMO_OBJDET_TCM_SIZE (30U * 1024U)
+#define MMWDEMO_OBJDET_TCM_SIZE (49U * 1024U)
 uint8_t gDPC_ObjDetTCM[MMWDEMO_OBJDET_TCM_SIZE];
 #pragma DATA_SECTION(gDPC_ObjDetTCM, ".DPC_objDetTcmbHeap");
 
@@ -404,7 +404,7 @@ static void uavcan_task(UArg arg0, UArg arg1)
         // publish_debug_msg();
         broadcast_node_status();
         handle_canard_tx_queue();
-        print_task_stats();
+        //print_task_stats();
         Task_sleep(1000);
     }
 }
