@@ -14,9 +14,6 @@
 # Configuration and project-specific files
 .settings/
 .metadata/
-.project
-.cproject
-.ccsproject
 .launch
 .clangd
 .xdchelp
