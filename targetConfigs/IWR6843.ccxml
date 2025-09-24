@@ -11,7 +11,7 @@
             <instance XML_version="1.2" href="drivers/tixds510icepick_m.xml" id="drivers" xml="tixds510icepick_m.xml" xmlpath="drivers"/>
             <instance XML_version="1.2" href="drivers/tixds510c674x.xml" id="drivers" xml="tixds510c674x.xml" xmlpath="drivers"/>
             <platform XML_version="1.2" id="platform_0">
-                <instance XML_version="1.2" desc="IWR6843" href="devices/iwr6843.xml" id="IWR6843" xml="iwr6843.xml" xmlpath="devices"/>
+                <instance XML_version="1.2" desc="IWR6843AOP" href="devices/iwr6843AOP.xml" id="IWR6843AOP" xml="iwr6843AOP.xml" xmlpath="devices"/>
             </platform>
         </connection>
     </configuration>

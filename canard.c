@@ -111,15 +111,15 @@ int16_t canardBroadcast(CanardInstance *ins,          ///< Library instance
 int16_t canardBroadcastObj(CanardInstance *ins,       ///< Library instance
                            CanardTxTransfer *transfer ///< Transfer object
 );
-// void canardEncodeScalar(void *destination,                   ///< Destination buffer where the result will be stored
-//                         uint32_t bit_offset,                 ///< Offset, in bits, from the beginning of the destination buffer
-//                         uint8_t bit_length,                  ///< Length of the value, in bits; see the table
-//                         const void *value);                  ///< Pointer to the value; see the table
-// int16_t canardDecodeScalar(const CanardRxTransfer *transfer, ///< The RX transfer where the data will be copied from
-//                            uint32_t bit_offset,              ///< Offset, in bits, from the beginning of the transfer
-//                            uint8_t bit_length,               ///< Length of the value, in bits; see the table
-//                            bool value_is_signed,             ///< True if the value can be negative; see the table
-//                            void *out_value);                 ///< Pointer to the output storage; see the table
+void canardEncodeScalar(void *destination,                   ///< Destination buffer where the result will be stored
+                        uint32_t bit_offset,                 ///< Offset, in bits, from the beginning of the destination buffer
+                        uint8_t bit_length,                  ///< Length of the value, in bits; see the table
+                        const void *value);                  ///< Pointer to the value; see the table
+int16_t canardDecodeScalar(const CanardRxTransfer *transfer, ///< The RX transfer where the data will be copied from
+                           uint32_t bit_offset,              ///< Offset, in bits, from the beginning of the transfer
+                           uint8_t bit_length,               ///< Length of the value, in bits; see the table
+                           bool value_is_signed,             ///< True if the value can be negative; see the table
+                           void *out_value);                 ///< Pointer to the output storage; see the table
 /*
  * API functions
  */
