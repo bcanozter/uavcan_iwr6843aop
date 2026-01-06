@@ -22,6 +22,21 @@ This is a work in progress project. Integrating uavcan protocol to TI mmwave sof
 
 * [DroneCAN GUI Tool](https://dronecan.github.io/GUI_Tool/Overview/)
 
+### QGroundControl
+
+
+* [QGroundControl](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/getting_started/download_and_install.html)
+
+You can see the distance_sensor messages. 
+
+![dronecan_gui_tool](/docs/qgc_mavlink.png)
+
+
+#### Ardupilot Copter DroneCAN
+
+* [DroneCAN Setup](https://ardupilot.org/copter/docs/common-uavcan-setup-advanced.html)
+
+
 ### ccs 20.2.0
 
 * [Code Composer Studio™ integrated development environment (IDE)](https://www.ti.com/tool/download/CCSTUDIO/20.2.0)
