@@ -69,7 +69,7 @@
 #define APP_NODE_NAME "org.bco.mmwave"
 
 #define UAVCAN_GETNODEINFO_REQUEST_EVENT (1 << 0)
-static uint8_t transfer_id = 0;
+// static uint8_t transfer_id = 0;
 
 CanardInstance canard;
 static uint8_t canard_memory_pool[2048];
@@ -175,6 +175,7 @@ CANFD_Handle canHandle;
 CANFD_MsgObjHandle txMsgObjHandle;
 CANFD_MsgObjHandle rxMsgObjHandle;
 CANFD_MCANMsgObjCfgParams txMsgObjectParams;
+static float range_distance = 0;
 
 typedef enum mmwDemo_can_message_type_e
 {
@@ -282,7 +283,7 @@ static void send_getnodeinfo_response(void){
                            &g_rxTransferInfo.transfer_id,
                            g_rxTransferInfo.priority,
                            CanardResponse,
-                           buffer,
+                           &buffer[0],
                            total_size);
 }
 static bool shouldAcceptTransfer(const CanardInstance *ins,
@@ -305,6 +306,54 @@ static bool shouldAcceptTransfer(const CanardInstance *ins,
     return false;
 }
 
+static uint64_t last_update_range_sensor = 0;
+const uint64_t PUBLISH_INTERVAL_USEC = 100000; // 100 milliseconds for 10Hz
+static void publish_range_sensor_measurement_msg()
+{
+    uint64_t now = get_uptime_usec();
+
+    if ((now - last_update_range_sensor) < PUBLISH_INTERVAL_USEC)
+    {
+        return;
+    }
+
+    last_update_range_sensor = now;
+    struct uavcan_equipment_range_sensor_Measurement msg;
+    memset(&msg, 0, sizeof(struct uavcan_equipment_range_sensor_Measurement));
+    uint8_t buffer[UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_MAX_SIZE];
+    memset(buffer, 0, sizeof(buffer));
+
+    msg.beam_orientation_in_body_frame.orientation_defined = true;
+    msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[0] = 0;
+    msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[1] = 0;
+    msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[2] = 0;
+    msg.timestamp.usec = get_uptime_usec();
+    msg.sensor_id = 1;
+    msg.field_of_view = 2.09f; // radians
+    msg.sensor_type = UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_SENSOR_TYPE_RADAR;
+    msg.reading_type = UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_VALID_RANGE;
+
+    msg.range = range_distance;
+    if (msg.range == 0)
+    {
+        msg.reading_type = UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_TOO_FAR;
+    }
+    uint32_t len = uavcan_equipment_range_sensor_Measurement_encode(&msg, buffer
+#if CANARD_ENABLE_TAO_OPTION
+                                                                    ,
+                                                                    true
+#endif
+    );
+    static uint8_t transfer_id;
+    canardBroadcast(&canard,
+                    UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_SIGNATURE,
+                    UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_ID,
+                    &transfer_id,
+                    CANARD_TRANSFER_PRIORITY_MEDIUM,
+                    buffer,
+                    len);
+}
+
 static void publish_debug_msg(void)
 {
     struct uavcan_protocol_debug_KeyValue msg;
@@ -319,7 +368,7 @@ static void publish_debug_msg(void)
     msg.key.len = debug_msg_len;
 
     uint32_t debug_len = uavcan_protocol_debug_KeyValue_encode(&msg, debug_buffer);
-
+    static uint8_t transfer_id;
     canardBroadcast(&canard,
                     UAVCAN_PROTOCOL_DEBUG_KEYVALUE_SIGNATURE,
                     UAVCAN_PROTOCOL_DEBUG_KEYVALUE_ID,
@@ -339,7 +388,7 @@ static void broadcast_node_status(void)
     node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
     node_status.sub_mode = 0;
     node_status.vendor_specific_status_code = 0;
-
+    static uint8_t transfer_id;
     uint32_t len = uavcan_protocol_NodeStatus_encode(&node_status, buffer);
     canardBroadcast(&canard,
                     UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE,
@@ -348,6 +397,20 @@ static void broadcast_node_status(void)
                     CANARD_TRANSFER_PRIORITY_LOW,
                     buffer,
                     len);
+}
+
+static uint64_t last_heartbeat_time_usec = 0;
+static uint64_t INTERVAL_USEC = 1000000;
+static void process_1hz_tasks(){
+    uint64_t now = get_uptime_usec();
+
+
+    if ((now - last_heartbeat_time_usec) < INTERVAL_USEC) {
+        return; 
+    }
+    last_heartbeat_time_usec = now;
+    canardCleanupStaleTransfers(&canard, get_uptime_usec());
+    broadcast_node_status();
 }
 
 static void handle_canard_tx_queue(void)
@@ -401,11 +464,11 @@ static void uavcan_task(UArg arg0, UArg arg1)
 
     while (1)
     {
-        // publish_debug_msg();
-        broadcast_node_status();
+        process_1hz_tasks();
+        publish_range_sensor_measurement_msg();
         handle_canard_tx_queue();
         //print_task_stats();
-        Task_sleep(1000);
+        Task_sleep(100);
     }
 }
 
@@ -2134,6 +2197,20 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tl[tlvIdx].length = sizeof(DPIF_PointCloudSideInfo) * result->numObjOut;
         packetLen += sizeof(MmwDemo_output_message_tl) + tl[tlvIdx].length;
         tlvIdx++;
+    }
+    if( result->numObjOut > 0){
+        float distance = 1e9;
+        for(i = 0; i < result->numObjOut; i++){
+            //Find the closest object.
+            float new_distance = sqrtf((result->objOut[i].x * result->objOut[i].x) +
+                                  (result->objOut[i].y * result->objOut[i].y));
+            if(new_distance < distance){
+                distance = new_distance;
+            }
+        }
+        range_distance = distance;
+    } else{
+        range_distance = 0;
     }
     if (pGuiMonSel->logMagRange)
     {

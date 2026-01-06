@@ -89,8 +89,8 @@ char *hardCodedConfigCommands[] = {
     "chirpCfg 2 2 0 0 0 0 0 2",
     "frameCfg 0 2 32 0 100 1 0",
     "guiMonitor -1 1 1 1 0 0 1",
-    "cfarCfg -1 0 2 8 4 3 0 15.0 0",
-    "cfarCfg -1 1 0 4 2 3 1 15.0 0",
+    "cfarCfg -1 0 2 8 4 3 0 20.0 0",
+    "cfarCfg -1 1 0 4 2 3 1 20.0 0",
     "multiObjBeamForming -1 1 0.5",
     "calibDcRangeSig -1 0 -5 8 256",
     "clutterRemoval -1 0",
@@ -99,7 +99,7 @@ char *hardCodedConfigCommands[] = {
     "measureRangeBiasAndRxChanPhase 0 1. 0.2",
 
     "aoaFovCfg -1 -90 90 -90 90",
-    "cfarFovCfg -1 0 0.25 9.0",
+    "cfarFovCfg -1 0 0.20 7.0",
     "cfarFovCfg -1 1 -20.16 20.16",
     "extendedMaxVelocity -1 0",
 
