@@ -2199,6 +2199,8 @@ void MmwDemo_transmitProcessedOutput(UART_Handle uartHandle,
         tlvIdx++;
     }
     if( result->numObjOut > 0){
+        //TODO: for debugging purposes, only reports the closest distance.
+        //This logic will change.
         float distance = 1e9;
         for(i = 0; i < result->numObjOut; i++){
             //Find the closest object.
