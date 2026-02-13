@@ -19,6 +19,7 @@
 #include <xdc/runtime/Memory.h>
 #include <ti/sysbios/BIOS.h>
 #include <ti/sysbios/knl/Task.h>
+#include <ti/sysbios/knl/Mailbox.h>
 #include <ti/sysbios/knl/Event.h>
 #include <ti/sysbios/knl/Semaphore.h>
 #include <ti/sysbios/gates/GateMutex.h>
@@ -68,19 +69,33 @@
 #define APP_VERSION_MINOR 0
 #define APP_NODE_NAME "org.bco.mmwave"
 
-#define UAVCAN_GETNODEINFO_REQUEST_EVENT (1 << 0)
-// static uint8_t transfer_id = 0;
 
 CanardInstance canard;
 static uint8_t canard_memory_pool[2048];
 static uint32_t get_uptime_sec(void);
 static uint64_t get_uptime_usec(void);
-static void send_getnodeinfo_response(void);
-Task_Handle dronecanTask;
-Task_Handle uavcanRxTask;
-static CanardRxTransfer g_rxTransferInfo;
-static Event_Handle g_rxEventHandle;
-static GateMutex_Handle gateMutexCanard;
+static void send_getnodeinfo_response(CanardInstance *ins,
+                               CanardRxTransfer *transfer);
+Task_Handle uavcanTaskHandle;
+#define MAILBOX_MAX_MSGS       64U
+typedef struct CanardRxFrameObj
+{
+    uint32_t id;
+    uint8_t data[64U];
+    uint8_t data_len;
+    uint8_t iface_id;
+} CanardRxFrameObj;
+typedef struct MailboxMsgObj
+{
+    Mailbox_MbxElem elem;
+    CanardRxFrameObj obj;
+} MailboxMsgObj;
+
+MailboxMsgObj mailboxBuffer[MAILBOX_MAX_MSGS];
+
+Mailbox_Struct canardMbxStruct;
+Mailbox_Handle canardMbxHandle;
+
 static volatile uint32_t clk_sys_ticks = 0;
 
 void clk0Fxn(UArg arg0);
@@ -96,11 +111,11 @@ Clock_Handle clkHandle;
  * dpm task assumes CLI task is held back during this processing. The alternative
  * is to use a semaphore between the two tasks.
  */
-#define MMWDEMO_CLI_TASK_PRIORITY 3
+#define MMWDEMO_CLI_TASK_PRIORITY 2
 #define MMWDEMO_DPC_OBJDET_DPM_TASK_PRIORITY 4
 #define MMWDEMO_MMWAVE_CTRL_TASK_PRIORITY 5
 #define UAVCAN_TASK_PRIORITY 3
-#define UAVCAN_RX_EVENT_TASK_PRIORITY 3
+
 
 #if (MMWDEMO_CLI_TASK_PRIORITY >= MMWDEMO_DPC_OBJDET_DPM_TASK_PRIORITY)
 #error CLI task priority must be < Object Detection DPM task priority
@@ -211,44 +226,20 @@ extern void MmwDemo_CLIInit(uint8_t taskPriority);
  ************************* UAVCAN / CANARD Functions **********************
  **************************************************************************/
 static void onTransferReceived(CanardInstance *ins,
-                               CanardRxTransfer *transfer)
-{
-    if ((transfer->transfer_type == CanardTransferTypeRequest) &&
-        (transfer->data_type_id == UAVCAN_PROTOCOL_GETNODEINFO_ID))
-    {
-        memset(&g_rxTransferInfo, 0, sizeof(CanardRxTransfer));
-        // CLI_write("[DEBUG] GetNodeInfo request from src: %d\n", transfer->source_node_id);
-        g_rxTransferInfo.timestamp_usec = transfer->timestamp_usec;
-        g_rxTransferInfo.source_node_id = transfer->source_node_id;
-        g_rxTransferInfo.data_type_id = transfer->data_type_id;
-        g_rxTransferInfo.transfer_id = transfer->transfer_id;
-        g_rxTransferInfo.priority = transfer->priority;
-        g_rxTransferInfo.transfer_type = transfer->transfer_type;
-        g_rxTransferInfo.payload_head = transfer->payload_head;
-        g_rxTransferInfo.payload_len = transfer->payload_len;
-        g_rxTransferInfo.payload_middle = transfer->payload_middle;
-        g_rxTransferInfo.payload_tail = transfer->payload_tail;
-        Event_post(g_rxEventHandle, UAVCAN_GETNODEINFO_REQUEST_EVENT);
-    }
-}
-static void uavcan_rx_event_task(UArg arg0, UArg arg1)
-{
-    uint32_t events;
-    int retval;
+                               CanardRxTransfer *transfer) {
 
-    while (1)
-    {
-        events = Event_pend(g_rxEventHandle, UAVCAN_GETNODEINFO_REQUEST_EVENT, Event_Id_NONE, BIOS_WAIT_FOREVER);
-        if (events & UAVCAN_GETNODEINFO_REQUEST_EVENT)
-        {
-            IArg key = GateMutex_enter(gateMutexCanard);
-            send_getnodeinfo_response();
-            GateMutex_leave(gateMutexCanard, key);
-        }
+  if ((transfer->transfer_type == CanardTransferTypeRequest)) {
+    switch (transfer->data_type_id) {
+    case UAVCAN_PROTOCOL_GETNODEINFO_ID: {
+      send_getnodeinfo_response(ins, transfer);
+      break;
     }
+    }
+  }
 }
 
-static void send_getnodeinfo_response(void){
+static void send_getnodeinfo_response(CanardInstance *ins,
+                               CanardRxTransfer *transfer){
     uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
     struct uavcan_protocol_GetNodeInfoResponse pkt;
     memset(&buffer, 0, sizeof(buffer));
@@ -261,30 +252,27 @@ static void send_getnodeinfo_response(void){
     node_status.vendor_specific_status_code = 0;
     pkt.status = node_status;
 
-    pkt.software_version.major = APP_VERSION_MAJOR;
-    pkt.software_version.minor = APP_VERSION_MINOR;
-    pkt.software_version.optional_field_flags = 0;
-    pkt.software_version.vcs_commit = 0;
 
-    pkt.hardware_version.major = 1;
-    pkt.hardware_version.minor = 0;
-    const uint8_t id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0};
-    memcpy(pkt.hardware_version.unique_id, id, sizeof(id));
-    const uint8_t node_name_len = strlen(APP_NODE_NAME);
-    strncpy((char *)pkt.name.data, APP_NODE_NAME, node_name_len);
-    pkt.name.len = node_name_len;
+  pkt.software_version.major = APP_VERSION_MAJOR;
+  pkt.software_version.minor = APP_VERSION_MINOR;
+  pkt.software_version.optional_field_flags = 0;
+  pkt.software_version.vcs_commit = 0;
 
-    uint32_t total_size = uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
+  pkt.hardware_version.major = 1;
+  pkt.hardware_version.minor = 0;
+  const uint8_t id[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0};                     
+  memcpy(pkt.hardware_version.unique_id, id, sizeof(id));
+  const uint8_t node_name_len = strlen(APP_NODE_NAME);
+  strncpy((char *)pkt.name.data, APP_NODE_NAME, node_name_len);
+  pkt.name.len = node_name_len;
 
-    canardRequestOrRespond(&canard,
-                           g_rxTransferInfo.source_node_id,
-                           UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE,
-                           UAVCAN_PROTOCOL_GETNODEINFO_ID,
-                           &g_rxTransferInfo.transfer_id,
-                           g_rxTransferInfo.priority,
-                           CanardResponse,
-                           &buffer[0],
-                           total_size);
+  uint16_t total_size =
+      uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
+
+  canardRequestOrRespond(
+      ins, transfer->source_node_id, UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE,
+      UAVCAN_PROTOCOL_GETNODEINFO_ID, &transfer->transfer_id,
+      transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 static bool shouldAcceptTransfer(const CanardInstance *ins,
                                  uint64_t *out_data_type_signature,
@@ -413,10 +401,9 @@ static void process_1hz_tasks(){
     broadcast_node_status();
 }
 
-static void handle_canard_tx_queue(void)
+#define CANARD_RX_MAILBOX_TIMEOUT 10U
+static void handle_canard_tx_rx_queue(void)
 {
-    IArg key = GateMutex_enter(gateMutexCanard);
-
     canardCleanupStaleTransfers(&canard, get_uptime_usec());
     Task_sleep(1);
     int32_t errCode = 0;
@@ -431,7 +418,15 @@ static void handle_canard_tx_queue(void)
             canardPopTxQueue(&canard);
         }
     }
-    GateMutex_leave(gateMutexCanard, key);
+    CanardRxFrameObj msg;
+    while(Mailbox_pend(canardMbxHandle, &msg, CANARD_RX_MAILBOX_TIMEOUT) == true){
+        CanardCANFrame rx_frame;
+        rx_frame.id = msg.id | CANARD_CAN_FRAME_EFF;
+        rx_frame.iface_id = msg.iface_id;
+        rx_frame.data_len = msg.data_len;
+        memcpy(rx_frame.data, &msg.data, msg.data_len);
+        canardHandleRxFrame(&canard, &rx_frame, get_uptime_usec());
+    }
 }
 
 void print_task_stats(void){
@@ -441,13 +436,10 @@ void print_task_stats(void){
     CLI_write("%20s %12d %12d %12d\n", "Init",
               stat.stackSize, stat.used, stat.stackSize - stat.used);
 
-    Task_stat(dronecanTask, &stat);
+    Task_stat(uavcanTaskHandle, &stat);
     CLI_write("%20s %12d %12d %12d\n", "dronecan",
               stat.stackSize, stat.used, stat.stackSize - stat.used);
 
-    Task_stat(uavcanRxTask, &stat);
-    CLI_write("%20s %12d %12d %12d\n", "uavcanrx",
-            stat.stackSize, stat.used, stat.stackSize - stat.used);
 
     CanardPoolAllocatorStatistics stats = canardGetPoolAllocatorStatistics(&canard);
     CLI_write("%20s %12s %12s %12s\n", " ", "capacity_blocks", "current_usage_blocks", "peak_usage_blocks");
@@ -457,6 +449,13 @@ void print_task_stats(void){
 
 static void uavcan_task(UArg arg0, UArg arg1)
 {
+    Mailbox_Params mbxParams;
+    Mailbox_Params_init(&mbxParams);
+    mbxParams.buf     = (Ptr)mailboxBuffer;
+    mbxParams.bufSize = sizeof(mailboxBuffer);
+    Mailbox_construct(&canardMbxStruct, sizeof(CanardRxFrameObj), MAILBOX_MAX_MSGS, &mbxParams, NULL);
+    canardMbxHandle = Mailbox_handle(&canardMbxStruct);
+
     // Init canard
     canardInit(&canard, canard_memory_pool, sizeof(canard_memory_pool),
                onTransferReceived, shouldAcceptTransfer, NULL);
@@ -464,11 +463,11 @@ static void uavcan_task(UArg arg0, UArg arg1)
 
     while (1)
     {
+        handle_canard_tx_rx_queue();
         process_1hz_tasks();
         publish_range_sensor_measurement_msg();
-        handle_canard_tx_queue();
         //print_task_stats();
-        Task_sleep(100);
+        Task_sleep(10);
     }
 }
 
@@ -3298,13 +3297,10 @@ static uint64_t get_uptime_usec(void){
     return ((uint64_t)clk_sys_ticks *  Clock_tickPeriod );
 }
 
-#define SOURCE_ID_FROM_ID(x) ((uint8_t)(((x) >> 0U) & 0x7FU))
-#define DEST_ID_FROM_ID(x) ((uint8_t)(((x) >> 8U) & 0x7FU))
 static void MCANAppCallback(CANFD_MsgObjHandle handle, CANFD_Reason reason)
 {
     int32_t errCode, retVal;
     uint32_t id;
-    CanardCANFrame rx_frame;
     CANFD_MCANFrameType rxFrameType;
     CANFD_MCANXidType rxIdType;
 
@@ -3332,23 +3328,14 @@ static void MCANAppCallback(CANFD_MsgObjHandle handle, CANFD_Reason reason)
 
         if (rxIdType == CANFD_MCANXidType_29_BIT)
         {
-            rx_frame.id = id | CANARD_CAN_FRAME_EFF;
-            rx_frame.iface_id = 0;
-            rx_frame.data_len = rxDataLength;
-            memcpy(rx_frame.data, &rxData, rxDataLength);
-            retVal = canardHandleRxFrame(&canard, &rx_frame, get_uptime_usec());
-            if (retVal < 0)
+            if (canardMbxHandle != NULL)
             {
-                // CLI_write("Error: canardHandleRxFrame %d\n", retVal);
-                if (retVal == -CANARD_ERROR_RX_MISSED_START)
-                {
-                    uint64_t dummy_signature;
-                    shouldAcceptTransfer(&canard,
-                                         &dummy_signature,
-                                         extractDataType(rx_frame.id),
-                                         extractTransferType(rx_frame.id),
-                                         0);
-                }
+                CanardRxFrameObj msg;
+                msg.id  =  id | CANARD_CAN_FRAME_EFF;
+                msg.iface_id = 0;
+                msg.data_len = rxDataLength;
+                memcpy(msg.data, &rxData, rxDataLength);
+                Mailbox_post(canardMbxHandle, &msg, BIOS_NO_WAIT);
             }
         }
 
@@ -3737,36 +3724,6 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
         CLI_write("Error: Calibration data initialization failed \n");
         MmwDemo_debugAssert(0);
     }
-    /* DRONECAN TASK */
-    GateMutex_Params gateMtxParams;
-    GateMutex_Params_init(&gateMtxParams);
-    gateMutexCanard = GateMutex_create(&gateMtxParams, NULL);
-    if (gateMutexCanard == NULL)
-    {
-        CLI_write("Error: gateMutexCanard create failed\n");
-        MmwDemo_debugAssert(0);
-        return;
-    }
-    Event_Params eventParams;
-    Event_Params_init(&eventParams);
-    g_rxEventHandle = Event_create(&eventParams, NULL);
-    if (g_rxEventHandle == NULL)
-    {
-        CLI_write("Error: RX Event creation failed!\n");
-        return;
-    }
-    Task_Params_init(&taskParams);
-    taskParams.priority = UAVCAN_TASK_PRIORITY;
-    taskParams.stackSize = 2 * 1024;
-    dronecanTask = Task_create(uavcan_task, &taskParams, NULL);
-    Task_Params_init(&taskParams);
-    taskParams.priority = UAVCAN_RX_EVENT_TASK_PRIORITY;
-    taskParams.stackSize = 2 * 1024;
-    uavcanRxTask = Task_create(uavcan_rx_event_task, &taskParams, NULL);
-    if (uavcanRxTask == NULL)
-    {
-        CLI_write("Error: UAVCAN RX event proc task create failed\n");
-    }
     /*****************************************************************************
      * Initialize the CLI Module:
      *      User can choose to create their own task here with the same priority
@@ -3774,6 +3731,11 @@ void MmwDemo_initTask(UArg arg0, UArg arg1)
      *****************************************************************************/
     MmwDemo_CLIInit(MMWDEMO_CLI_TASK_PRIORITY);
 
+    Task_Params_init(&taskParams);
+    taskParams.priority = UAVCAN_TASK_PRIORITY;
+    taskParams.stackSize = 2 * 1024;
+    uavcanTaskHandle = Task_create(uavcan_task, &taskParams, NULL);
+    
     return;
 }
 
